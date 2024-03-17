@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import io
 import json
 import logging
 import os
@@ -19,7 +20,7 @@ from datetime import datetime, timedelta
 
 import boto3
 from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
-
+import pandas as pd
 
 try:
     client = boto3.client("ce")
@@ -37,6 +38,10 @@ try:
     ssm_client = boto3.client("ssm")
 except Exception as e:
     logging.error("Error creating boto3 client for ssm:" + str(e))
+try:
+    s3 = boto3.client("s3")
+except Exception as e:
+    logging.error("Error creating boto3 client: " + str(e))
 
 
 def cost_of_instance(event, client, resource_id, start_date, end_date):
@@ -87,9 +92,20 @@ def get_region_names():
         raise
 
 # Get the region names dictionary
-region_names = get_region_names()
+# region_names = get_region_names()
 
-def lambda_handler(event, context):
+def get_cumulative_cost(cur_data, resource_id):
+    df = pd.json_normalize(cur_data)
+    print("df")
+    print(df)
+    print(df.columns.tolist())
+    # print(df["lineItem/UnblendedCost"])
+    cost = df.loc[df["lineItem/ResourceId"] == resource_id].sum()["lineItem/UnblendedCost"]
+    print(cost)
+    print("df done")
+    return cost
+
+def lambda_handler(event):
     """
     The main Lambda function that is executed.
 
@@ -119,11 +135,12 @@ def lambda_handler(event, context):
         registry=registry,
     )
 
-    roles = event
+    roles = event["resource_mapping"]
+    cur_data = event["cur_data"]
     cost_by_days = 14
     end_date = str(datetime.now().date())
     start_date = str(datetime.now().date() - timedelta(days=cost_by_days))
-    account_id = context.invoked_function_arn.split(":")[4]
+    account_id = "1234"
     
     new_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
     
@@ -135,6 +152,9 @@ def lambda_handler(event, context):
             continue
         else:
             service_details = roles[i]["Service Details"]
+            print("service details")
+            print(service_details)
+            print("service details done")
 
             if len(service_details) == 0:
                 response = cost_of_instance(event, client, "None", start_date, end_date)
@@ -161,73 +181,141 @@ def lambda_handler(event, context):
 
                 # check if detail is a dictionary
                 if isinstance(detail, dict):
-                    # extract the "Instance_Region" and "Instance" fields
-                    instance_region = detail["Instance_Region"]
-                    instance = detail["Instance"]
-                    ec2 = "ec2:instance/" + instance
-                    response = cost_of_instance(
-                        event, client, instance, start_date, end_date
-                    )
 
-                    ec2_resource = boto3.resource("ec2", region_name=instance_region)
-                    state = ec2_resource.Instance(instance).state["Name"]
+                    # Example code snippet for handling Fargate within lambda_handler
 
-                    if state != "terminated":
-                        if state == "running":
+                    if detail["Service"] == "Fargate":
+                        cluster = detail.get("Cluster")
+                        task_arn = detail.get("Task")
+                        task_def = detail.get("TaskDefinition")
 
-                            cumulative = 0.0
-                            for j in range(len(response["ResultsByTime"])):
-                                time_Data = response["ResultsByTime"][j]["TimePeriod"][
-                                    "End"
-                                ]
-                                new_time = time_Data.replace("00:00:00", "12:02:02")
-                                cumulative = cumulative + float(
-                                    response["ResultsByTime"][j]["Total"][
-                                        "UnblendedCost"
-                                    ]["Amount"]
+                        # Example pseudocode for calculating Fargate task cost
+                        # fargate_cost = get_cumulative_cost(cur_data, task_arn)
+                        fargate_cost = 0.7 #Dummy
+
+                        iam_service_gauge.labels(
+                            # new_time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "2024-03-17 12:02:02", #Dummy
+                            role,
+                            role_region,
+                            account_id,
+                            task_arn,
+                            fargate_cost,
+                            "Active"  # Assuming Fargate tasks are active; adjust as needed
+                        ).set(fargate_cost)
+
+                        print("**** AAA Fargate Cost Done ****")
+
+                    elif detail["Service"] == "ec2":
+                        # extract the "Instance_Region" and "Instance" fields
+                        instance_region = detail["Instance_Region"]
+                        instance = detail["Instance"]
+                        ec2 = "ec2:instance/" + instance
+                        response = cost_of_instance(
+                            event, client, instance, start_date, end_date
+                        )
+
+                        ec2_resource = boto3.resource("ec2", region_name=instance_region)
+                        state = ec2_resource.Instance(instance).state["Name"]
+
+                        if state != "terminated":
+                            if state == "running":
+
+                                cumulative = 0.0
+                                for j in range(len(response["ResultsByTime"])):
+                                    time_Data = response["ResultsByTime"][j]["TimePeriod"][
+                                        "End"
+                                    ]
+                                    new_time = time_Data.replace("00:00:00", "12:02:02")
+                                    cumulative = cumulative + float(
+                                        response["ResultsByTime"][j]["Total"][
+                                            "UnblendedCost"
+                                        ]["Amount"]
+                                    )
+
+                                    iam_service_gauge.labels(
+                                        (
+                                            datetime.strptime(
+                                                new_time, "%Y-%m-%dT%H:%M:%SZ"
+                                            )
+                                        ).strftime("%Y-%m-%d %H:%M:%S"),
+                                        role,
+                                        "unknown region name",
+                                        # f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
+                                        account_id,
+                                        ec2,
+                                        cumulative,
+                                        "Stop",
+                                    ).set(cumulative)
+                            elif state == "stopped":
+                                cumulative = 0.0
+                                for j in range(len(response["ResultsByTime"])):
+                                    time_Data = response["ResultsByTime"][j]["TimePeriod"][
+                                        "End"
+                                    ]
+                                    new_time = time_Data.replace("00:00:00", "12:02:02")
+                                    cumulative = cumulative + float(
+                                        response["ResultsByTime"][j]["Total"][
+                                            "UnblendedCost"
+                                        ]["Amount"]
+                                    )
+
+                                    iam_service_gauge.labels(
+                                        (
+                                            datetime.strptime(
+                                                new_time, "%Y-%m-%dT%H:%M:%SZ"
+                                            )
+                                        ).strftime("%Y-%m-%d %H:%M:%S"),
+                                        role,
+                                        "unknown region name",
+                                        # f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
+                                        account_id,
+                                        ec2,
+                                        cumulative,
+                                        "Start",
+                                    ).set(cumulative)
+                        else:
+                            continue
+
+                    elif detail["Service"] == "lambda":
+                        print("I am here")
+                        # extract the "Function_Region" and "Function" fields
+                        function_region = detail["Function_Region"]
+                        function = detail["Function"]
+                        lambda_function = "lambda:function/" + function
+                        lambda_cost = get_cumulative_cost(cur_data, function)
+                        # response = cost_of_instance(
+                        #     event, client, function, start_date, end_date
+                        # )
+
+                        # cumulative = 0.0
+                        # for j in range(len(response["ResultsByTime"])):
+                        #     time_Data = response["ResultsByTime"][j]["TimePeriod"][
+                        #         "End"
+                        #     ]
+                        #     new_time = time_Data.replace("00:00:00", "12:02:02")
+                        #     cumulative = cumulative + float(
+                        #         response["ResultsByTime"][j]["Total"][
+                        #             "UnblendedCost"
+                        #         ]["Amount"]
+                        #     )
+
+                        iam_service_gauge.labels(
+                            (
+                                datetime.strptime(
+                                    new_time, "%Y-%m-%dT%H:%M:%SZ"
                                 )
+                            ).strftime("%Y-%m-%d %H:%M:%S"),
+                            role,
+                            "unknown region name",
+                            # f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
+                            account_id,
+                            lambda_function,
+                            lambda_cost,
+                            "None",
+                        ).set(cumulative)
 
-                                iam_service_gauge.labels(
-                                    (
-                                        datetime.strptime(
-                                            new_time, "%Y-%m-%dT%H:%M:%SZ"
-                                        )
-                                    ).strftime("%Y-%m-%d %H:%M:%S"),
-                                    role,
-                                    f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
-                                    account_id,
-                                    ec2,
-                                    cumulative,
-                                    "Stop",
-                                ).set(cumulative)
-                        elif state == "stopped":
-                            cumulative = 0.0
-                            for j in range(len(response["ResultsByTime"])):
-                                time_Data = response["ResultsByTime"][j]["TimePeriod"][
-                                    "End"
-                                ]
-                                new_time = time_Data.replace("00:00:00", "12:02:02")
-                                cumulative = cumulative + float(
-                                    response["ResultsByTime"][j]["Total"][
-                                        "UnblendedCost"
-                                    ]["Amount"]
-                                )
-
-                                iam_service_gauge.labels(
-                                    (
-                                        datetime.strptime(
-                                            new_time, "%Y-%m-%dT%H:%M:%SZ"
-                                        )
-                                    ).strftime("%Y-%m-%d %H:%M:%S"),
-                                    role,
-                                    f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
-                                    account_id,
-                                    ec2,
-                                    cumulative,
-                                    "Start",
-                                ).set(cumulative)
-                    else:
-                        continue
+                        
 
                 elif isinstance(detail, str):
                     iam_service_gauge.labels(
@@ -235,7 +323,8 @@ def lambda_handler(event, context):
                             "%Y-%m-%d %H:%M:%S"
                         ),
                         role,
-                        f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
+                        "Unknown region name",
+                        # f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
                         account_id,
                         detail,
                         "0",
@@ -243,7 +332,7 @@ def lambda_handler(event, context):
                     ).set(0)
 
     push_to_gateway(
-        os.environ["prometheus_ip"], job="IAM-roles-service-data", registry=registry
+        "pushgateway:9091", job="IAM-roles-service-data", registry=registry
     )
 
     return {"statusCode": 200, "body": json.dumps("Service Lambda Data Pushed")}

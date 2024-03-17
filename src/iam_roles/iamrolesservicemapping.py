@@ -27,8 +27,60 @@ try:
 except Exception as e:
     logging.error("Error creating boto3 client: " + str(e))
 
+# try:
+#     ecs_client = boto3.client("ecs")
+# except Exception as e:
+#     logging.error("Error creating boto3 client: " + str(e))
 
-def lambda_handler(event, context):
+
+def handle_fargate_tasks(role_name, role_region, service_mapping):
+    """
+    Identifies Fargate tasks associated with a given IAM role and region,
+    and appends detailed information to the service mapping list.
+    """
+    # if role_region == "None":
+    #     # Skip if the role region is not identified
+    #     return
+    # ecs_client = boto3.client("ecs", region_name=role_region)
+
+    # print("**** AAA ECS Client DONE ****")
+
+    # # List clusters to identify tasks across all clusters
+    # clusters = ecs_client.list_clusters()["clusterArns"]
+    # for cluster_arn in clusters:
+    #     # List tasks for each cluster
+    #     task_arns = ecs_client.list_tasks(cluster=cluster_arn, launchType='FARGATE')["taskArns"]
+    #     if task_arns:
+    #         # Describe tasks to get detailed information including the task definition
+    #         tasks = ecs_client.describe_tasks(cluster=cluster_arn, tasks=task_arns)["tasks"]
+    #         for task in tasks:
+    #             # Check if the task role ARN matches the current role being processed
+    #             task_def_arn = task["taskDefinitionArn"]
+    #             task_def = ecs_client.describe_task_definition(taskDefinition=task_def_arn)["taskDefinition"]
+    #             if "executionRoleArn" in task_def and task_def["executionRoleArn"].endswith(role_name):
+    #                 # Append Fargate task details to the service mapping
+    #                 task_detail = {
+    #                     "Service": "Fargate",
+    #                     "Cluster": cluster_arn,
+    #                     "Task": task["taskArn"],
+    #                     "TaskDefinition": task_def_arn
+    #                 }
+    #                 service_mapping.append(task_detail)
+
+    # Dummy [s]
+    task_detail = {
+        "Service": "Fargate",
+        "Cluster": "Auninda_Cluster_01",
+        "Task": "Auninda_Task_01",
+        "TaskDefinition": "Auninda_Definition_01"
+    }
+    service_mapping.append(task_detail)
+
+    print("**** AAA handle_fargate_tasks DONE ****")
+    # Dummy [e]
+
+
+def lambda_handler(event):
 
     """
     List Services Association with IAM Roles.
@@ -45,8 +97,9 @@ def lambda_handler(event, context):
         api not execute
     """
 
-    function_name = os.environ["function_name_iamroleservice"]
-    resource_file_content = event
+    # function_name = os.environ["function_name_iamroleservice"]
+    resource_file_content = event["list_of_iam_roles"]
+    cur_data = event["cur_data"]
     resource_mapping = []
 
     # parsing iam role detail
@@ -82,10 +135,18 @@ def lambda_handler(event, context):
                 else:
                     # skipping AWS User and federated User
                     continue
+                print("service list")
+                print(service_list)
+                print("service list done")
             try:
                 for resource in service_list:
+                    
+                    # handling ecs services here
+                    if resource == "ecs-tasks":
+                        handle_fargate_tasks(role_name, role_region, service_mapping)
+
                     # handling ec2 service here
-                    if resource == "ec2":
+                    elif resource == "ec2":
                         if role_region == "None":
                             # role is not in use
                             continue
@@ -125,10 +186,52 @@ def lambda_handler(event, context):
                                         "AvailabilityZone"
                                     ][:-1]
                                     instance_detail = {
+                                        "Service": "ec2",
                                         "Instance_Region": instance_region,
                                         "Instance": instance_id,
                                     }
                                     service_mapping.append(instance_detail)
+                    elif resource == "lambda":
+                        if role_region == "None":
+                            # role is not in use
+                            continue
+                        else:
+                            service_client = boto3.client(
+                                resource
+                            )
+                        try:
+                            list_of_lambdas = service_client.list_functions()
+                            print("list lambdas")
+                            print(list_of_lambdas)
+                            print("list lambdas done")
+                        except Exception as e:
+                            logging.error("Error getting list of lambdas" + str(e))
+                            return {
+                                "statusCode": 500,
+                                "body": json.dumps({"Error": str(e)}),
+                            }
+
+                        # getting lambdas description from the above list
+                        lambdas_iterator = list_of_lambdas["Functions"]
+                        for function in lambdas_iterator:
+                            function_arn = function["FunctionArn"]
+                            function_region = function["FunctionArn"].split(':')[3]
+                            function_role_arn = function["Role"]
+                            print("function_iam_role", function_role_arn)
+                            print("role_arn", role_arn)
+                            if function_role_arn != role_arn:
+                                # if the lambda is not assuming this role
+                                continue
+                            else:
+                                function_detail = {
+                                    "Service": "lambda",
+                                    "Function_Region": function_region,
+                                    "Function": function_arn
+                                }
+                                service_mapping.append(function_detail)
+                                # print("service_mapping")
+                                # print(service_mapping)
+                                # print("service_mapping done")
                     else:
                         # adding other services
                         service_mapping.append(resource)
@@ -144,21 +247,33 @@ def lambda_handler(event, context):
         }
         resource_mapping.append(role_mapping)
 
+        print("resource_mapping")
+        print(resource_mapping)
+        print("resource_mapping done")
+
+        payload_service = {
+            "resource_mapping": resource_mapping,
+            "cur_data": cur_data
+        }
+
         try:
-            invoker = lambda_client.invoke(
-                FunctionName=function_name,
-                InvocationType="Event",
-                Payload=json.dumps(resource_mapping),
-            )
+            import iamrolesservice
+            iamrolesservice.lambda_handler(payload_service)
+            # invoker = lambda_client.invoke(
+            #     FunctionName=function_name,
+            #     InvocationType="Event",
+            #     Payload=json.dumps(resource_mapping),
+            # )
             # Extract the status code from the response
-            status_code = invoker["StatusCode"]
-            if status_code != 202:
-                # Handle unexpected status code
-                logging.error(
-                    f"Unexpected status code {status_code} returned from iamroleservice_lambda"
-                )
+            # status_code = invoker["StatusCode"]
+            # if status_code != 202:
+            #     # Handle unexpected status code
+            #     logging.error(
+            #         f"Unexpected status code {status_code} returned from iamroleservice_lambda"
+            #     )
         except Exception as e:
             logging.error("Error in invoking lambda function: " + str(e))
+            raise e
             return {
                 "statusCode": 500,
                 "body": "Error invoking iamroleservice_lambda",
