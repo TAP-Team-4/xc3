@@ -27,6 +27,74 @@ try:
 except Exception as e:
     logging.error("Error creating boto3 client: " + str(e))
 
+# try:
+#     ecs_client = boto3.client("ecs")
+# except Exception as e:
+#     logging.error("Error creating boto3 client: " + str(e))
+
+def handle_fargate_tasks(role_name, role_region, service_mapping):
+    """
+    Identifies Fargate tasks associated with a given IAM role and region,
+    and appends detailed information to the service mapping list.
+    """
+    # if role_region == "None":
+    #     # Skip if the role region is not identified
+    #     return
+    # ecs_client = boto3.client("ecs", region_name=role_region)
+
+    # print("**** AAA ECS Client DONE ****")
+
+    # # List clusters to identify tasks across all clusters
+    # clusters = ecs_client.list_clusters()["clusterArns"]
+    # for cluster_arn in clusters:
+    #     # List tasks for each cluster
+    #     task_arns = ecs_client.list_tasks(cluster=cluster_arn, launchType='FARGATE')["taskArns"]
+    #     if task_arns:
+    #         # Describe tasks to get detailed information including the task definition
+    #         tasks = ecs_client.describe_tasks(cluster=cluster_arn, tasks=task_arns)["tasks"]
+    #         for task in tasks:
+    #             # Check if the task role ARN matches the current role being processed
+    #             task_def_arn = task["taskDefinitionArn"]
+    #             task_id = task["id"]
+    #             task_def = ecs_client.describe_task_definition(taskDefinition=task_def_arn)["taskDefinition"]
+    #             if "executionRoleArn" in task_def and task_def["executionRoleArn"].endswith(role_name):
+    #                 # Append Fargate task details to the service mapping
+    #                 task_detail = {
+    #                     "Service": "Fargate",
+    #                     "Cluster": cluster_arn,
+    #                     "Task" : task_id,
+    #                     "TaskArn": task["taskArn"],
+    #                     "TaskDefinition": task_def_arn
+    #                 }
+    #                 service_mapping.append(task_detail)
+
+    # Dummy [s]
+    task_detail_1 = {
+        "Service": "Fargate",
+        "Cluster": "Auninda_Cluster_01",
+        "Task": "arn:aws:ecs:ap-southeast-2:767398022717:task:task01",
+        "TaskDefinition": "Auninda_Task_Definition_01"
+    }
+    task_detail_2 = {
+        "Service": "Fargate",
+        "Cluster": "Auninda_Cluster_01",
+        "Task": "arn:aws:ecs:ap-southeast-2:767398022717:task:task02",
+        "TaskDefinition": "Auninda_Task_Definition_02"
+    }
+    task_detail_3 = {
+        "Service": "Fargate",
+        "Cluster": "Auninda_Cluster_01",
+        "Task": "arn:aws:ecs:ap-southeast-2:767398022717:task:task03",
+        "TaskDefinition": "Auninda_Task_Definition_03"
+    }
+    service_mapping.append(task_detail_1)
+    service_mapping.append(task_detail_2)
+    service_mapping.append(task_detail_3)
+
+    print("**** AAA handle_fargate_tasks DONE ****")
+    # Dummy [e]
+
+
 
 def lambda_handler(event, context):
 
@@ -84,8 +152,14 @@ def lambda_handler(event, context):
                     continue
             try:
                 for resource in service_list:
+
+                    # handling ecs services here
+                    if resource == "ecs-tasks":
+                        handle_fargate_tasks(role_name, role_region, service_mapping)
+
+
                     # handling ec2 service here
-                    if resource == "ec2":
+                    elif resource == "ec2":
                         if role_region == "None":
                             # role is not in use
                             continue

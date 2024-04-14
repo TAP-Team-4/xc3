@@ -75,8 +75,8 @@ def lambda_handler(event, context):
     """
 
     list_of_iam_roles = []
-    bucket = event["Records"][0]["s3"]["bucket"]["name"]
-    key = unquote_plus(event["Records"][0]["s3"]["object"]["key"])
+    bucket = "auninda-bucket"
+    key = "iam-role/iam-roles-in-use/resources.json.gz"
     if "resources" in key:
         try:
             response = s3.get_object(Bucket=bucket, Key=key)

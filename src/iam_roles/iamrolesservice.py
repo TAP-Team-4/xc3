@@ -106,7 +106,8 @@ def get_cur_data():
     end_date_str = f"{end_date.strftime('%Y%m')}01"
     full_date_range = f"{start_date_str}-{end_date_str}"
 
-    key = f"report/reportbucket/{full_date_range}/reportbucket-00001.csv.gz"
+    # key = f"report/reportbucket/{full_date_range}/reportbucket-00001.csv.gz"
+    key = "report/reportbucket/20240301-20240401/reportbucket-00002.csv.gz"
     try:
         response = s3.get_object(Bucket=bucket, Key=key)
         resource_file = response["Body"].read()
@@ -216,7 +217,32 @@ def lambda_handler(event, context):
 
                 # check if detail is a dictionary
                 if isinstance(detail, dict):
-                    if detail["Service"] == "ec2":
+
+                    if detail["Service"] == "Fargate":
+                        cluster = detail.get("Cluster")
+                        task_id = detail.get("Task")
+                        task_def = detail.get("TaskDefinition")
+
+                        fargate_cost = get_cumulative_cost(cur_data, task_id)
+
+                        iam_service_gauge.labels(
+                            (
+                                datetime.strptime(
+                                    new_time, "%Y-%m-%dT%H:%M:%SZ"
+                                )
+                            ).strftime("%Y-%m-%d %H:%M:%S"),
+                            role,
+                            f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
+                            account_id,
+                            task_id,
+                            fargate_cost,
+                            "None",
+                        ).set(fargate_cost)
+
+                        print("**** AAA Fargate Cost Done ****")
+
+
+                    elif detail["Service"] == "ec2":
                         # extract the "Instance_Region" and "Instance" fields
                         instance_region = detail["Instance_Region"]
                         instance = detail["Instance"]
