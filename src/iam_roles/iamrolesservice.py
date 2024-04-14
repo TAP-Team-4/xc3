@@ -12,16 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import gzip
 import io
 import json
 import logging
 import os
 from datetime import datetime, timedelta
+from dateutil import relativedelta
 
 import boto3
 from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
 import pandas as pd
 
+try:
+    s3 = boto3.client("s3")
+except Exception as e:
+    logging.error("Error creating boto3 client: " + str(e))
 try:
     client = boto3.client("ce")
 except Exception as e:
@@ -94,18 +100,55 @@ def get_region_names():
 # Get the region names dictionary
 # region_names = get_region_names()
 
-def get_cumulative_cost(cur_data, resource_id):
-    df = pd.json_normalize(cur_data)
-    print("df")
-    print(df)
-    print(df.columns.tolist())
-    # print(df["lineItem/UnblendedCost"])
+
+def get_cur_data():
+    bucket = os.environ["report_bucket_name"]
+
+    current_date = datetime.now()
+    start_date_str = f"{current_date.strftime('%Y%m')}01"
+    end_date = datetime.strptime(start_date_str, "%Y%m%d") + relativedelta.relativedelta(months=1)
+    end_date_str = f"{end_date.strftime('%Y%m')}01"
+    full_date_range = f"{start_date_str}-{end_date_str}"
+
+    key = f"report/reportbucket/{full_date_range}/reportbucket-00001.csv.gz"
+    try:
+        response = s3.get_object(Bucket=bucket, Key=key)
+        resource_file = response["Body"].read()
+        cur_data = {}
+        with gzip.GzipFile(fileobj=io.BytesIO(resource_file), mode="rb") as data:
+            cur_data = pd.read_csv(io.BytesIO(data.read()))
+            cur_data = cur_data[[
+                "product/ProductName",
+                "lineItem/ResourceId",
+                "lineItem/UnblendedCost",
+            ]]
+            return cur_data.to_json(orient='records')
+    except Exception as e:
+        logging.error(
+            "Error getting object {} from bucket {}. Make sure they exist and your bucket is in the same region as this function.".format(
+                key, bucket
+            )
+        )
+        return {"statusCode": 500, "body": json.dumps({"Error": str(e)})}
+
+# Get the cost and usage report data
+cur_data = get_cur_data()
+
+def get_cumulative_cost(resource_id):
+    """
+    Fetches the cost for a given resource ID from the Cost and Usage Report.
+
+    Args:
+        resource_id (str): The ID of the resource to fetch the cost for.
+
+    Returns:
+        The cumulative cost of the resource in the Cost and Usage Report.
+    """
+    df = pd.json_normalize(json.loads(cur_data))
     cost = df.loc[df["lineItem/ResourceId"] == resource_id].sum()["lineItem/UnblendedCost"]
-    print(cost)
-    print("df done")
     return cost
 
-def lambda_handler(event):
+def lambda_handler(event, context):
     """
     The main Lambda function that is executed.
 
@@ -181,32 +224,7 @@ def lambda_handler(event):
 
                 # check if detail is a dictionary
                 if isinstance(detail, dict):
-
-                    # Example code snippet for handling Fargate within lambda_handler
-
-                    if detail["Service"] == "Fargate":
-                        cluster = detail.get("Cluster")
-                        task_arn = detail.get("Task")
-                        task_def = detail.get("TaskDefinition")
-
-                        # Example pseudocode for calculating Fargate task cost
-                        # fargate_cost = get_cumulative_cost(cur_data, task_arn)
-                        fargate_cost = 0.7 #Dummy
-
-                        iam_service_gauge.labels(
-                            # new_time.strftime("%Y-%m-%d %H:%M:%S"),
-                            "2024-03-17 12:02:02", #Dummy
-                            role,
-                            role_region,
-                            account_id,
-                            task_arn,
-                            fargate_cost,
-                            "Active"  # Assuming Fargate tasks are active; adjust as needed
-                        ).set(fargate_cost)
-
-                        print("**** AAA Fargate Cost Done ****")
-
-                    elif detail["Service"] == "ec2":
+                    if detail["Service"] == "ec2":
                         # extract the "Instance_Region" and "Instance" fields
                         instance_region = detail["Instance_Region"]
                         instance = detail["Instance"]
@@ -240,8 +258,7 @@ def lambda_handler(event):
                                             )
                                         ).strftime("%Y-%m-%d %H:%M:%S"),
                                         role,
-                                        "unknown region name",
-                                        # f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
+                                        f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
                                         account_id,
                                         ec2,
                                         cumulative,
@@ -267,8 +284,7 @@ def lambda_handler(event):
                                             )
                                         ).strftime("%Y-%m-%d %H:%M:%S"),
                                         role,
-                                        "unknown region name",
-                                        # f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
+                                        f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
                                         account_id,
                                         ec2,
                                         cumulative,
@@ -276,29 +292,12 @@ def lambda_handler(event):
                                     ).set(cumulative)
                         else:
                             continue
-
+                        
                     elif detail["Service"] == "lambda":
-                        print("I am here")
-                        # extract the "Function_Region" and "Function" fields
-                        function_region = detail["Function_Region"]
+                        # extract the "Function" field
                         function = detail["Function"]
                         lambda_function = "lambda:function/" + function
-                        lambda_cost = get_cumulative_cost(cur_data, function)
-                        # response = cost_of_instance(
-                        #     event, client, function, start_date, end_date
-                        # )
-
-                        # cumulative = 0.0
-                        # for j in range(len(response["ResultsByTime"])):
-                        #     time_Data = response["ResultsByTime"][j]["TimePeriod"][
-                        #         "End"
-                        #     ]
-                        #     new_time = time_Data.replace("00:00:00", "12:02:02")
-                        #     cumulative = cumulative + float(
-                        #         response["ResultsByTime"][j]["Total"][
-                        #             "UnblendedCost"
-                        #         ]["Amount"]
-                        #     )
+                        lambda_cost = get_cumulative_cost(function)
 
                         iam_service_gauge.labels(
                             (
@@ -307,15 +306,12 @@ def lambda_handler(event):
                                 )
                             ).strftime("%Y-%m-%d %H:%M:%S"),
                             role,
-                            "unknown region name",
-                            # f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
+                            f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
                             account_id,
                             lambda_function,
                             lambda_cost,
                             "None",
-                        ).set(cumulative)
-
-                        
+                        ).set(lambda_cost)
 
                 elif isinstance(detail, str):
                     iam_service_gauge.labels(

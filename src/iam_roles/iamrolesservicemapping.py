@@ -201,9 +201,12 @@ def lambda_handler(event):
                             )
                         try:
                             list_of_lambdas = service_client.list_functions()
+<<<<<<< HEAD
                             print("list lambdas")
                             print(list_of_lambdas)
                             print("list lambdas done")
+=======
+>>>>>>> team4/feature-IAM-Role-Based-Resource-Cost-Breakdown
                         except Exception as e:
                             logging.error("Error getting list of lambdas" + str(e))
                             return {
@@ -217,8 +220,11 @@ def lambda_handler(event):
                             function_arn = function["FunctionArn"]
                             function_region = function["FunctionArn"].split(':')[3]
                             function_role_arn = function["Role"]
+<<<<<<< HEAD
                             print("function_iam_role", function_role_arn)
                             print("role_arn", role_arn)
+=======
+>>>>>>> team4/feature-IAM-Role-Based-Resource-Cost-Breakdown
                             if function_role_arn != role_arn:
                                 # if the lambda is not assuming this role
                                 continue
@@ -229,9 +235,12 @@ def lambda_handler(event):
                                     "Function": function_arn
                                 }
                                 service_mapping.append(function_detail)
+<<<<<<< HEAD
                                 # print("service_mapping")
                                 # print(service_mapping)
                                 # print("service_mapping done")
+=======
+>>>>>>> team4/feature-IAM-Role-Based-Resource-Cost-Breakdown
                     else:
                         # adding other services
                         service_mapping.append(resource)

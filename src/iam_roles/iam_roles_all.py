@@ -60,32 +60,7 @@ def get_region_names():
 # region_names = get_region_names()
 
 
-def get_cur_data():
-    bucket = "team4reportbucket"
-    key = "report/reportbucket/20240301-20240401/reportbucket-00001.csv.gz"
-    try:
-        response = s3.get_object(Bucket=bucket, Key=key)
-        resource_file = response["Body"].read()
-        cur_data = {}
-        with gzip.GzipFile(fileobj=io.BytesIO(resource_file), mode="rb") as data:
-            cur_data = pd.read_csv(io.BytesIO(data.read()))
-            cur_data = cur_data[[
-                "product/ProductName",
-                "lineItem/ResourceId",
-                "lineItem/UnblendedCost",
-            ]]
-            print(cur_data)
-            return cur_data
-    except Exception as e:
-        logging.error(
-            "Error getting object {} from bucket {}. Make sure they exist and your bucket is in the same region as this function.".format(
-                key, bucket
-            )
-        )
-        return {"statusCode": 500, "body": json.dumps({"Error": str(e)})}
-
-
-def lambda_handler():
+def lambda_handler(event, context):
     """
     Lambda handler function that extracts IAM role information
     and pushes it to Prometheus.
