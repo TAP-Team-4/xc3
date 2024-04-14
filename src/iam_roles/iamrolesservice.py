@@ -44,10 +44,6 @@ try:
     ssm_client = boto3.client("ssm")
 except Exception as e:
     logging.error("Error creating boto3 client for ssm:" + str(e))
-try:
-    s3 = boto3.client("s3")
-except Exception as e:
-    logging.error("Error creating boto3 client: " + str(e))
 
 
 def cost_of_instance(event, client, resource_id, start_date, end_date):
@@ -98,7 +94,7 @@ def get_region_names():
         raise
 
 # Get the region names dictionary
-# region_names = get_region_names()
+region_names = get_region_names()
 
 
 def get_cur_data():
@@ -178,12 +174,11 @@ def lambda_handler(event, context):
         registry=registry,
     )
 
-    roles = event["resource_mapping"]
-    cur_data = event["cur_data"]
+    roles = event
     cost_by_days = 14
     end_date = str(datetime.now().date())
     start_date = str(datetime.now().date() - timedelta(days=cost_by_days))
-    account_id = "1234"
+    account_id = context.invoked_function_arn.split(":")[4]
     
     new_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
     
@@ -195,9 +190,6 @@ def lambda_handler(event, context):
             continue
         else:
             service_details = roles[i]["Service Details"]
-            print("service details")
-            print(service_details)
-            print("service details done")
 
             if len(service_details) == 0:
                 response = cost_of_instance(event, client, "None", start_date, end_date)
@@ -319,8 +311,7 @@ def lambda_handler(event, context):
                             "%Y-%m-%d %H:%M:%S"
                         ),
                         role,
-                        "Unknown region name",
-                        # f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
+                        f"{role_region} ({region_names.get(role_region, 'unknown region name')})",
                         account_id,
                         detail,
                         "0",
@@ -328,7 +319,7 @@ def lambda_handler(event, context):
                     ).set(0)
 
     push_to_gateway(
-        "pushgateway:9091", job="IAM-roles-service-data", registry=registry
+        os.environ["prometheus_ip"], job="IAM-roles-service-data", registry=registry
     )
 
     return {"statusCode": 200, "body": json.dumps("Service Lambda Data Pushed")}

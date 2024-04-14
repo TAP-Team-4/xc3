@@ -36,8 +36,7 @@ try:
     ssm_client = boto3.client("ssm")
 except Exception as e:
     logging.error("Error creating boto3 client for ssm:" + str(e))
-
-
+    
 def get_region_names():
     """
     Retrieves the region names dictionary from AWS Systems Manager Parameter Store.
@@ -46,18 +45,17 @@ def get_region_names():
     - dict: The region names dictionary.
     """
     region_path = os.environ["region_names_path"]
-
+    
     try:
         response = ssm_client.get_parameter(Name=region_path)
         region_names = json.loads(response["Parameter"]["Value"])
         return region_names
     except Exception as e:
-        logging.error(
-            "Error retrieving region names from Parameter Store: " + str(e))
+        logging.error("Error retrieving region names from Parameter Store: " + str(e))
         raise
 
 # Get the region names dictionary
-# region_names = get_region_names()
+region_names = get_region_names()
 
 
 def lambda_handler(event, context):
@@ -77,8 +75,8 @@ def lambda_handler(event, context):
     """
 
     list_of_iam_roles = []
-    bucket = "auninda-bucket"
-    key = "iam-role/iam-roles-in-use/resources.json.gz"
+    bucket = event["Records"][0]["s3"]["bucket"]["name"]
+    key = unquote_plus(event["Records"][0]["s3"]["object"]["key"])
     if "resources" in key:
         try:
             response = s3.get_object(Bucket=bucket, Key=key)
@@ -94,54 +92,39 @@ def lambda_handler(event, context):
             return {"statusCode": 500, "body": json.dumps({"Error": str(e)})}
     logging.info(list_of_iam_roles)
 
-    account_id = "1234"
+    account_id = context.invoked_function_arn.split(":")[4]
 
     registry = CollectorRegistry()
     iam_role_all_gauge = Gauge(
         "IAM_Role_All",
         "XC3 All IAM Roles",
-        labelnames=["iam_role_all", "iam_role_all_region",
-                    "iam_role_all_account"],
+        labelnames=["iam_role_all", "iam_role_all_region", "iam_role_all_account"],
         registry=registry,
     )
 
-    # functionName = os.environ["func_name_iam_role_service_mapping"]
-    # try:
-    print("iam roles")
-    print(list_of_iam_roles)
-    print("iam roles done")
-    payload_service_mapping = {
-        "list_of_iam_roles": list_of_iam_roles,
-        "cur_data": json.loads(get_cur_data().to_json(orient='records'))
-    }
-    import iamrolesservicemapping
-    iamrolesservicemapping.lambda_handler(payload_service_mapping)
-    # iam_role_service_lambda_payload = lambda_client.invoke(
-    #     FunctionName=functionName,
-    #     InvocationType="Event",
-    #     Payload=json.dumps(list_of_iam_roles),
-    # )
-    # Extract the status code from the response
-    # status_code = iam_role_service_lambda_payload["StatusCode"]
-    # if status_code != 202:
-    #     # Handle unexpected status code
-    #     logging.error(
-    #         f"Unexpected status code {status_code} returned from iam_role_service_lambda"
-    #     )
-    # except Exception as e:
-    #     logging.error("Error in invoking lambda function: " + str(e))
-    #     return {"statusCode": 500, "body": "Error invoking iam_role_service_lambda"}
+    functionName = os.environ["func_name_iam_role_service_mapping"]
+    try:
+        iam_role_service_lambda_payload = lambda_client.invoke(
+            FunctionName=functionName,
+            InvocationType="Event",
+            Payload=json.dumps(list_of_iam_roles),
+        )
+        # Extract the status code from the response
+        status_code = iam_role_service_lambda_payload["StatusCode"]
+        if status_code != 202:
+            # Handle unexpected status code
+            logging.error(
+                f"Unexpected status code {status_code} returned from iam_role_service_lambda"
+            )
+    except Exception as e:
+        logging.error("Error in invoking lambda function: " + str(e))
+        return {"statusCode": 500, "body": "Error invoking iam_role_service_lambda"}
 
     for role in list_of_iam_roles:
         role_name = role["RoleName"]
         region = role["RoleLastUsed"].get("Region", "None")
-        # region = f"{region} ({region_names.get(region, 'unknown region name')})"
-        # iam_role_all_gauge.labels(role_name, region, account_id).set(0)
+        region = f"{region} ({region_names.get(region, 'unknown region name')})"
         iam_role_all_gauge.labels(role_name, region, account_id).set(0)
 
-    push_to_gateway("pushgateway:9091", job="IAM-roles-all", registry=registry)
+    push_to_gateway(os.environ["prometheus_ip"], job="IAM-roles-all", registry=registry)
     return {"statusCode": 200, "body": json.dumps(list_of_iam_roles)}
-
-
-if __name__ == '__main__':
-    lambda_handler()
