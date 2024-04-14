@@ -228,7 +228,18 @@ def lambda_handler(event, context):
                                 ).set(cumulative)
                     else:
                         continue
-
+                #Mar[s]
+                # New logic to handle ECS costs
+                elif 'ecs' in role['Service Details']:
+                    ecs_cost = cost_of_instance(event, client,'Amazon Elastic Container Service', start_date, end_date)
+                    # Updating Prometheus gauge for ECS
+                    iam_service_gauge.labels(
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        role['RoleName'], role['RoleRegion'], role['AccountId'],
+                        'ECS', ecs_cost, 'N/A'  
+                    ).set(ecs_cost)
+                #Mar[e]
+                    
                 elif isinstance(detail, str):
                     iam_service_gauge.labels(
                         (datetime.strptime(new_time, "%Y-%m-%dT%H:%M:%SZ")).strftime(

@@ -26,6 +26,10 @@ try:
     lambda_client = boto3.client("lambda")
 except Exception as e:
     logging.error("Error creating boto3 client: " + str(e))
+try:
+    ecs_client = boto3.client("ecs") # Added ECS client initialization
+except Exception as e:
+    logging.error("Error creating boto3 client: " + str(e))
 
 
 def lambda_handler(event, context):
@@ -129,6 +133,42 @@ def lambda_handler(event, context):
                                         "Instance": instance_id,
                                     }
                                     service_mapping.append(instance_detail)
+                    #Mar[s]
+                    # New condition to handle ECS services
+                    elif resource == "ecs":  
+                        if role_region == "None":
+                            continue
+                        else:
+                            # Fetch ECS-related information tied to the IAM role
+                            try:
+                                # List clusters
+                                clusters = ecs_client.list_clusters()['clusterArns']
+                                for cluster_arn in clusters:
+                                    # List services for each cluster
+                                    service_arns = ecs_client.list_services(cluster=cluster_arn)['serviceArns']
+                                    if service_arns:
+                                        # Fetch detailed information for each service
+                                        detailed_services = ecs_client.describe_services(
+                                            cluster=cluster_arn,
+                                            services=service_arns
+                                        )['services']
+                                        for service in detailed_services:
+                                            # Extract relevant service information (e.g., serviceName, runningCount)
+                                            service_info = {
+                                                'ClusterArn': cluster_arn,
+                                                'ServiceName': service['serviceName'],
+                                                'TaskDefinition': service['taskDefinition'],
+                                                'DesiredCount': service['desiredCount'],
+                                                'RunningCount': service['runningCount'],
+                                                'Status': service['status']
+                                            }
+                                            service_mapping.append(service_info)
+                                    else:
+                                        logging.info(f"No services found in cluster: {cluster_arn}")
+                            except Exception as e:
+                                logging.error(f"Error processing ECS details: {str(e)}")
+                                return {"statusCode": 500, "body": json.dumps({"Error": str(e)})}
+                            #Mar[e]
                     else:
                         # adding other services
                         service_mapping.append(resource)
